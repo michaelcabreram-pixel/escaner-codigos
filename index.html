@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Escáner de códigos</title>
+<style>
+:root{--bg:#f5f6f8;--card:#ffffff;--text:#1c1f24;--muted:#5d6570;--accent:#0b6e4f;--border:#d6dae0;--err:#b3261e;--ok:#1e7a3c}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){--bg:#111316;--card:#1b1f24;--text:#eef1f4;--muted:#9aa4b0;--accent:#3ccf9a;--border:#333a43;--err:#ff8a80;--ok:#7be39c}
+}
+:root[data-theme="dark"]{--bg:#111316;--card:#1b1f24;--text:#eef1f4;--muted:#9aa4b0;--accent:#3ccf9a;--border:#333a43;--err:#ff8a80;--ok:#7be39c}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-text-size-adjust:100%}
+main{max-width:520px;margin:0 auto;padding:16px}
+h1{font-size:22px;margin:8px 0 12px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:12px}
+#reader{width:100%;border-radius:8px;overflow:hidden;background:#000}
+#reader video{width:100%!important;height:auto!important}
+button{font:inherit;border:0;border-radius:10px;padding:14px;width:100%;background:var(--accent);color:#fff;font-weight:600;cursor:pointer}
+button:disabled{opacity:.6}
+button.sec{background:transparent;color:var(--text);border:1px solid var(--border)}
+button[hidden]{display:none}
+label{display:block;font-size:14px;color:var(--muted);margin:10px 0 4px}
+input,select,textarea{width:100%;font:inherit;padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--bg);color:var(--text)}
+textarea{min-height:72px;resize:vertical}
+.row{display:flex;gap:8px}
+.row>div{flex:1;min-width:0}
+.hint{color:var(--muted);font-size:14px;margin:8px 0 0}
+#estado{margin-top:12px;font-size:15px;min-height:1.4em}
+.ok{color:var(--ok)}
+.err{color:var(--err)}
+</style>
+</head>
+<body>
+<main>
+  <h1>Escáner de códigos</h1>
+
+  <section class="card">
+    <div id="reader"></div>
+    <div class="row" style="margin-top:10px">
+      <button id="btnCamara" type="button">Activar cámara</button>
+      <button id="btnDetener" type="button" class="sec" hidden>Detener</button>
+    </div>
+    <p class="hint">Apunta a un código EAN-13 o Code 128. También puedes escribirlo a mano abajo.</p>
+  </section>
+
+  <form id="form" class="card" autocomplete="off">
+    <label for="tipo">Tipo</label>
+    <select id="tipo" name="tipo">
+      <option value="Bodega">Bodega</option>
+      <option value="Medidor">Medidor</option>
+    </select>
+
+    <label for="codigo">Código</label>
+    <input id="codigo" name="codigo" inputmode="numeric" placeholder="Escanea o escribe" required>
+
+    <label for="formato">Formato</label>
+    <input id="formato" name="formato" value="Manual" readonly>
+
+    <div class="row">
+      <div>
+        <label for="cantidad">Cantidad o lectura</label>
+        <input id="cantidad" name="cantidad" inputmode="decimal" value="1" required>
+      </div>
+      <div>
+        <label for="usuario">Usuario</label>
+        <input id="usuario" name="usuario" required>
+      </div>
+    </div>
+
+    <label for="notas">Notas</label>
+    <textarea id="notas" name="notas"></textarea>
+
+    <div style="margin-top:14px">
+      <button type="submit" id="btnGuardar">Guardar</button>
+    </div>
+    <div id="estado" role="status" aria-live="polite"></div>
+  </form>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script>
+  // Configuración
+  const URL_SCRIPT = 'https://script.google.com/macros/s/AKfycbwMIKfrNLsv3PgQ1PQ2PcYWkywgAK1Tsv67QP42spntrcuZFQvfDxerhvyEuZP3RV7K2Q/exec';
+  const TOKEN = 'Esc-T9xK2mQ7vL4pR8wN3zB6hJ1dF5gY0sA';
+  const HOJA = 'Escaneos';
+
+  const $ = id => document.getElementById(id);
+  const form = $('form'), tipo = $('tipo'), codigo = $('codigo'), formato = $('formato'),
+        cantidad = $('cantidad'), usuario = $('usuario'), notas = $('notas'),
+        estado = $('estado'), btnGuardar = $('btnGuardar'),
+        btnCamara = $('btnCamara'), btnDetener = $('btnDetener');
+
+  let scanner = null;
+
+  function mostrar(msg, cls) {
+    estado.textContent = msg;
+    estado.className = cls || '';
+  }
+
+  function nombreFormato(r) {
+    const f = r && r.result && r.result.format && r.result.format.formatName;
+    if (f === 'EAN_13') return 'EAN-13';
+    if (f === 'CODE_128') return 'Code 128';
+    return 'Otro';
+  }
+
+  async function detenerCamara() {
+    if (scanner) {
+      try { await scanner.stop(); } catch (e) {}
+      try { scanner.clear(); } catch (e) {}
+      scanner = null;
+    }
+    btnCamara.hidden = false;
+    btnDetener.hidden = true;
+  }
+
+  async function onLectura(texto, resultado) {
+    codigo.value = texto;
+    formato.value = nombreFormato(resultado);
+    if (navigator.vibrate) navigator.vibrate(120);
+    await detenerCamara();
+    mostrar('Código leído. Revisa los datos y guarda.', 'ok');
+  }
+
+  async function iniciarCamara() {
+    if (typeof Html5Qrcode === 'undefined') {
+      mostrar('No se cargó el lector de códigos. Revisa tu conexión.', 'err');
+      return;
+    }
+    if (!window.isSecureContext) {
+      mostrar('La cámara requiere una página segura (https).', 'err');
+      return;
+    }
+    try {
+      scanner = new Html5Qrcode('reader', {
+        formatsToSupport: [Html5QrcodeSupportedFormats.EAN_13, Html5QrcodeSupportedFormats.CODE_128],
+        verbose: false
+      });
+      await scanner.start(
+        { facingMode: 'environment' },
+        { fps: 10, qrbox: { width: 280, height: 150 } },
+        onLectura,
+        () => {}
+      );
+      btnCamara.hidden = true;
+      btnDetener.hidden = false;
+      mostrar('Cámara activa. Apunta al código.');
+    } catch (err) {
+      scanner = null;
+      mostrar('No se pudo abrir la cámara (' + err + '). Escribe el código a mano.', 'err');
+    }
+  }
+
+  btnCamara.addEventListener('click', iniciarCamara);
+  btnDetener.addEventListener('click', () => { detenerCamara(); mostrar(''); });
+
+  codigo.addEventListener('input', () => { formato.value = 'Manual'; });
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!form.checkValidity()) { form.reportValidity(); return; }
+
+    btnGuardar.disabled = true;
+    mostrar('Guardando…');
+    try {
+      const r = await fetch(URL_SCRIPT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({
+          token: TOKEN,
+          hoja: HOJA,
+          tipo: tipo.value,
+          codigo: codigo.value.trim(),
+          formato: formato.value,
+          cantidad: cantidad.value.trim(),
+          usuario: usuario.value.trim(),
+          notas: notas.value.trim()
+        })
+      });
+      const j = await r.json();
+      if (j.ok) {
+        mostrar('Guardado en la hoja.', 'ok');
+        codigo.value = '';
+        formato.value = 'Manual';
+        notas.value = '';
+      } else {
+        mostrar('Error: ' + (j.error || 'desconocido'), 'err');
+      }
+    } catch (err) {
+      mostrar('No se pudo enviar: ' + err, 'err');
+    } finally {
+      btnGuardar.disabled = false;
+    }
+  });
+</script>
+</body>
+</html>
